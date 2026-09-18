@@ -42,10 +42,12 @@ def query_database(database_id: str) -> list[dict]:
 
 
 def find_date_property(properties: dict) -> tuple[str, dict] | None:
-    """Find the first date-type property in a page's properties."""
-    for name, prop in properties.items():
-        if prop["type"] == "date" and prop.get("date"):
-            return name, prop["date"]
+    """Find the data/deadline date property."""
+    prop = properties.get("data/deadline")
+
+    if prop and prop["type"] == "date" and prop.get("date"):
+        return "data/deadline", prop["date"]
+
     return None
 
 
