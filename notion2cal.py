@@ -18,7 +18,7 @@ NOTION_API_BASE = "https://api.notion.com/v1"
 
 
 def query_database(database_id: str) -> list[dict]:
-    """Query all pages from a Notion database via its data source."""
+    """Query all pages from the first data source in a Notion database."""
 
     headers = {
         "Authorization": f"Bearer {NOTION_TOKEN}",
@@ -26,9 +26,14 @@ def query_database(database_id: str) -> list[dict]:
         "Content-Type": "application/json",
     }
 
-    # Get the database and find its data source ID
+    # Get the database and find its data source
     database_url = f"{NOTION_API_BASE}/databases/{database_id}"
-    resp = requests.get(database_url, headers=headers, timeout=30)
+
+    resp = requests.get(
+        database_url,
+        headers=headers,
+        timeout=30,
+    )
     resp.raise_for_status()
 
     database = resp.json()
