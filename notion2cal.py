@@ -12,30 +12,58 @@ NOTION_TOKEN = os.environ.get("NOTION_TOKEN")
 NOTION_DATABASE_ID = os.environ.get("NOTION_DATABASE_ID")
 OUTPUT_FILE = os.environ.get("OUTPUT_FILE", "notion_calendar.ics")
 
-NOTION_API_VERSION = "2022-06-28"
+NOTION_API_VERSION = "2026-03-11"
+
 NOTION_API_BASE = "https://api.notion.com/v1"
 
 
 def query_database(database_id: str) -> list[dict]:
-    """Query all pages from a Notion database, handling pagination."""
-    url = f"{NOTION_API_BASE}/databases/{database_id}/query"
+    """Query all pages from a Notion database via its data source."""
+
     headers = {
         "Authorization": f"Bearer {NOTION_TOKEN}",
         "Notion-Version": NOTION_API_VERSION,
         "Content-Type": "application/json",
     }
 
+    # Get the database and find its data source ID
+    database_url = f"{NOTION_API_BASE}/databases/{database_id}"
+    resp = requests.get(database_url, headers=headers, timeout=30)
+    resp.raise_for_status()
+
+    database = resp.json()
+    data_sources = database.get("data_sources", [])
+
+    if not data_sources:
+        raise RuntimeError(
+            "No data source found for this Notion database."
+        )
+
+    data_source_id = data_sources[0]["id"]
+
+    print(f"Using Notion data source {data_source_id[:8]}...")
+
+    # Query the data source
+    url = f"{NOTION_API_BASE}/data_sources/{data_source_id}/query"
+
     results = []
     payload: dict = {}
 
     while True:
-        resp = requests.post(url, headers=headers, json=payload, timeout=30)
+        resp = requests.post(
+            url,
+            headers=headers,
+            json=payload,
+            timeout=30,
+        )
         resp.raise_for_status()
+
         data = resp.json()
-        results.extend(data["results"])
+        results.extend(data.get("results", []))
 
         if not data.get("has_more"):
             break
+
         payload["start_cursor"] = data["next_cursor"]
 
     return results
