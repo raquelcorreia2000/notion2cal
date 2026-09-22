@@ -27,8 +27,6 @@ NOTION_API_BASE = "https://api.notion.com/v1"
 # --------------------------------------------------
 
 def get_headers() -> dict:
-    """Return headers required by the Notion API."""
-
     return {
         "Authorization": f"Bearer {NOTION_TOKEN}",
         "Notion-Version": NOTION_API_VERSION,
@@ -36,42 +34,94 @@ def get_headers() -> dict:
     }
 
 
-def query_database(database_id: str) -> list[dict]:
+def find_data_source(database_id: str) -> str:
     """
-    Retrieve the database, find its first data source,
-    then retrieve all pages from that data source.
+    Find the data source belonging to the Notion database.
+    Uses the Notion search endpoint instead of the database endpoint.
     """
 
     headers = get_headers()
 
-    # First: retrieve the database
-    database_url = f"{NOTION_API_BASE}/databases/{database_id}"
+    url = f"{NOTION_API_BASE}/search"
 
-    response = requests.get(
-        database_url,
+    payload = {
+        "filter": {
+            "property": "object",
+            "value": "data_source"
+        },
+        "page_size": 100
+    }
+
+    response = requests.post(
+        url,
         headers=headers,
+        json=payload,
         timeout=30,
     )
 
     response.raise_for_status()
 
-    database = response.json()
+    data = response.json()
 
-    data_sources = database.get("data_sources", [])
+    # Try to find the data source belonging to our database.
+    for result in data.get("results", []):
 
-    if not data_sources:
-        raise RuntimeError(
-            "No data source was found for this Notion database."
-        )
+        parent = result.get("parent", {})
 
-    data_source_id = data_sources[0]["id"]
+        # Depending on the Notion API response, the database
+        # relationship may be represented in different ways.
+        parent_database_id = parent.get("database_id")
 
-    print(
-        f"Using Notion data source "
-        f"{data_source_id[:8]}..."
+        if parent_database_id:
+            normalized_parent = parent_database_id.replace("-", "")
+            normalized_database = database_id.replace("-", "")
+
+            if normalized_parent == normalized_database:
+                data_source_id = result.get("id")
+
+                if data_source_id:
+                    print(
+                        f"Found data source: "
+                        f"{data_source_id}"
+                    )
+
+                    return data_source_id
+
+    # If the direct relationship was not returned,
+    # try matching the database ID inside the response.
+    database_id_clean = database_id.replace("-", "")
+
+    for result in data.get("results", []):
+
+        result_text = str(result)
+
+        if database_id_clean in result_text:
+
+            data_source_id = result.get("id")
+
+            if data_source_id:
+                print(
+                    f"Found data source: "
+                    f"{data_source_id}"
+                )
+
+                return data_source_id
+
+    raise RuntimeError(
+        "Could not find the data source for the Notion database. "
+        f"Database ID: {database_id}"
     )
 
-    # Second: query the data source
+
+def query_database(database_id: str) -> list[dict]:
+    """
+    Find the database's data source and retrieve all pages.
+    """
+
+    data_source_id = find_data_source(database_id)
+
+    headers = get_headers()
+
     query_url = (
         f"{NOTION_API_BASE}"
         f"/data_sources/{data_source_id}/query"
@@ -120,6 +170,7 @@ def query_database(database_id: str) -> list[dict]:
 def find_date_property(
     properties: dict,
 ) -> tuple[str, dict] | None:
+
     """
     Use ONLY the data/deadline date property.
     """
@@ -140,7 +191,6 @@ def find_date_property(
 
 
 def get_title(properties: dict) -> str:
-    """Extract the page title."""
 
     for prop in properties.values():
 
@@ -163,7 +213,6 @@ def get_rich_text(
     properties: dict,
     name: str,
 ) -> str:
-    """Extract plain text from a rich_text property."""
 
     prop = properties.get(name)
 
@@ -180,10 +229,6 @@ def get_rich_text(
 
 
 def find_description(properties: dict) -> str:
-    """
-    Try common property names for a description.
-    If none exist, use the first non-empty rich_text property.
-    """
 
     possible_names = (
         "Description",
@@ -203,8 +248,6 @@ def find_description(properties: dict) -> str:
         if text:
             return text
 
-    # Fallback:
-    # find the first non-empty rich_text property
     for prop in properties.values():
 
         if prop.get("type") != "rich_text":
@@ -228,14 +271,6 @@ def find_description(properties: dict) -> str:
 def parse_datetime(
     value: str,
 ) -> datetime | date:
-    """
-    Parse a Notion date value.
-
-    Supports:
-    - datetime with microseconds
-    - datetime without microseconds
-    - date-only values
-    """
 
     formats = (
         "%Y-%m-%dT%H:%M:%S.%f%z",
@@ -263,7 +298,6 @@ def parse_datetime(
 def build_calendar(
     pages: list[dict],
 ) -> Calendar:
-    """Build an iCalendar from all Notion pages."""
 
     calendar = Calendar()
 
@@ -288,7 +322,6 @@ def build_calendar(
     )
 
     skipped_no_date = 0
-
     events_created = 0
 
     for page in pages:
@@ -298,13 +331,12 @@ def build_calendar(
             {},
         )
 
-        # Only use data/deadline
+        # ONLY data/deadline
         date_info = find_date_property(
             properties
         )
 
         if not date_info:
-
             skipped_no_date += 1
             continue
 
@@ -319,18 +351,15 @@ def build_calendar(
         )
 
         if not start_raw:
-
             skipped_no_date += 1
             continue
 
-        # Extract information
         title = get_title(properties)
 
         description = find_description(
             properties
         )
 
-        # Parse dates
         start = parse_datetime(
             start_raw
         )
@@ -341,7 +370,6 @@ def build_calendar(
             else None
         )
 
-        # Create event
         event = Event()
 
         event.add(
@@ -366,20 +394,15 @@ def build_calendar(
             and not isinstance(start, datetime)
         ):
 
-            # All-day event with no end.
-            # Nothing else is required.
-
             pass
 
         else:
 
-            # Timed event with no end.
             event.add(
                 "dtend",
                 start,
             )
 
-        # Description
         if description:
 
             event.add(
@@ -387,19 +410,16 @@ def build_calendar(
                 description,
             )
 
-        # Unique ID
         event.add(
             "uid",
             f"{page['id']}@notion2cal",
         )
 
-        # Timestamp
         event.add(
             "dtstamp",
             datetime.now(timezone.utc),
         )
 
-        # Notion page URL
         page_url = page.get("url")
 
         if page_url:
@@ -431,7 +451,6 @@ def build_calendar(
 
 def main() -> None:
 
-    # Check token
     if not NOTION_TOKEN:
 
         print(
@@ -442,7 +461,6 @@ def main() -> None:
 
         sys.exit(1)
 
-    # Check database ID
     if not NOTION_DATABASE_ID:
 
         print(
@@ -455,10 +473,9 @@ def main() -> None:
 
     print(
         "Querying Notion database "
-        f"{NOTION_DATABASE_ID[:8]}..."
+        f"{NOTION_DATABASE_ID}"
     )
 
-    # Fetch pages
     pages = query_database(
         NOTION_DATABASE_ID
     )
@@ -467,12 +484,10 @@ def main() -> None:
         f"Fetched {len(pages)} pages from Notion."
     )
 
-    # Build calendar
     calendar = build_calendar(
         pages
     )
 
-    # Write .ics file
     with open(
         OUTPUT_FILE,
         "wb",
